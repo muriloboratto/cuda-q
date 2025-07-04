@@ -1,0 +1,96 @@
+%%writefile hhl_cudaq.cpp
+#include <cudaq.h>
+#include <cudaq.h>
+#include <cudaq/algorithm.h>
+#include <cmath>
+#include <iostream>
+struct HHL {
+  void operator()() __qpu__ {
+    using namespace cudaq;
+
+    qubit clock0;    // qubit clock 0
+    qubit clock1;    // qubit clock 1
+    qubit b;         // vetor b
+    qubit ancilla;   // ancilla para rotação condicional
+      
+    // A = [1 , -1/3, -1/3, 1]
+
+    // Inicializa |b> = [0, 1]
+    x(b);
+
+    // QPE: Hadamard nos qubits de clock
+    h(clock0);
+    h(clock1);
+
+    // Simulação de U = e^{iAt} via decomposição do cu gate
+    // cu(π/2, -π/2, π/2, 3π/4) aplicado de clock0 para b
+    rz<ctrl>(M_PI / 2, clock0, b);
+    ry<ctrl>(-M_PI / 2, clock0, b);
+    rz<ctrl>(M_PI / 2, clock0, b);
+    rz<ctrl>(3*M_PI/4, clock0, b); // fase global
+
+    // cu(π/2, π/2, -π/2, -3π/4) == U² aplicado de clock1 para b
+    rz<ctrl>(M_PI, clock1, b);
+    ry<ctrl>(M_PI, clock1, b);
+    rz<ctrl>(0.0, clock1, b);
+    
+    // CP (Controlled-Phase) = Fase entre os clocks (simula eigenvalue phase)
+    h(clock1);
+    rz<ctrl>(-M_PI / 2, clock0, clock1);
+    h(clock0);
+    swap(clock0, clock1);
+      
+    // Rotação inversa condicional no ancilla (~1/λ)
+    ry<ctrl>(M_PI, clock0, ancilla);
+    ry<ctrl>(M_PI / 3.0, clock1, ancilla);
+
+    // IQPE
+    swap(clock0, clock1);
+    h(clock0);
+    rz<ctrl>(M_PI / 2, clock0, clock1);
+    h(clock1);
+      
+    // Simula U† = e^{-iAt} (a inversa de antes)
+    rz<ctrl>(M_PI/2, clock0, b);
+    ry<ctrl>(M_PI/2, clock0, b);
+    rz<ctrl>(-M_PI/2, clock0, b);
+    rz<ctrl>(-3*M_PI/4, clock0, b); // fase global
+
+    rz<ctrl>(M_PI, clock1, b);
+    ry<ctrl>(M_PI, clock1, b);
+    rz<ctrl>(0.0, clock1, b);
+      
+    // Fim da QPE
+    h(clock0);
+    h(clock1);
+
+    // Medições
+    mz(b);
+    mz(ancilla);
+  }
+};
+
+int main() {
+  using namespace std::chrono;
+
+  auto start = high_resolution_clock::now();
+
+  auto result = cudaq::sample(HHL{});
+
+  auto end = high_resolution_clock::now();
+  duration<double> elapsed = end - start;
+
+  std::cout << "Probabilidades para cada estado medido (ancilla + b):\n";
+
+  int total = 0;
+  for (auto &[bits, count] : result) total += count;
+
+  for (auto &[bits, count] : result) {
+    double prob = static_cast<double>(count) / total;
+    std::cout << "Estado " << bits << ": " << prob << "\n";
+  }
+
+  std::cout << "Tempo de execução: " << elapsed.count() << " segundos\n";
+
+  return 0;
+}
